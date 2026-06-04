@@ -11,7 +11,7 @@ from models.clip_models import CLIPModelShuffleAttentionPenultimateLayer
 
 FAKE_EXPLANATION = (
     "Analyzing the color scheme, shadows, lighting and fine-level details "
-    "there is indication that this file has been tempered with."
+    "there is indication that this file has been tampered with."
 )
 REAL_EXPLANATION = "This image appears legitimate"
 
