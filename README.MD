@@ -74,6 +74,15 @@ Execution:
 python validate_for_robustness.py
 ```
 
+Runtime JSONL inference:
+```bash
+python run.py --model_path ckpt/classifier.pth --input_folder /path/to/images --output_folder /path/to/output
+```
+`run.py` reads `.png` and `.webp` files and writes:
+- `detection.jsonl` with `{"id": "<filename>", "pred_label": 0|1}`
+- `complex.jsonl` with explanations
+- `simple.jsonl` with explanations
+
 📂 4. Combined Dataset
 
 Our composite dataset merges resources from:
@@ -91,7 +100,6 @@ If you find our work helpful in your research, please cite it using the followin
   year={2025}
 }
 ```
-
 
 
 
