@@ -115,7 +115,7 @@ def main():
             detection_rows.append({"id": file_name, "pred_label": pred_label})
             complex_rows.append({"id": file_name, "complex_explanation": explanation})
             simple_rows.append({"id": file_name, "simple_explanation": explanation})
-            fake_count += int(pred_label == 1)
+            fake_count += pred_label
 
         processed_count += len(batch_paths)
         print(f"Processed {processed_count}/{total_files} files")
