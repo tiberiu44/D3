@@ -83,6 +83,9 @@ python run.py --model_path ckpt/classifier.pth --input_folder /path/to/images --
 - `complex.jsonl` with explanations
 - `simple.jsonl` with explanations
 
+By default, `run.py` uses a center crop (`--crop-size`, default `224`) before normalization.  
+Use `--multi-crop` to run five crops (center, top-left, top-right, bottom-right, bottom-left) and mark an image as fake if any crop is predicted fake.
+
 📂 4. Combined Dataset
 
 Our composite dataset merges resources from:
@@ -100,6 +103,5 @@ If you find our work helpful in your research, please cite it using the followin
   year={2025}
 }
 ```
-
 
 

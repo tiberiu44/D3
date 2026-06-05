@@ -4,6 +4,7 @@ import os
 
 import torch
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as TF
 from PIL import Image
 
 from models.clip_models import CLIPModelShuffleAttentionPenultimateLayer
@@ -30,9 +31,22 @@ def parse_args():
         default=256,
         help="Number of images to process per inference batch",
     )
+    parser.add_argument(
+        "--crop-size",
+        type=int,
+        default=224,
+        help="Crop size used by the classifier",
+    )
+    parser.add_argument(
+        "--multi-crop",
+        action="store_true",
+        help="Run 5-crop inference (center + four corners) and mark fake if any crop is fake",
+    )
     args = parser.parse_args()
     if args.batch_size <= 0:
         parser.error("--batch-size must be a positive integer")
+    if args.crop_size <= 0:
+        parser.error("--crop-size must be a positive integer")
     return args
 
 
@@ -60,17 +74,50 @@ def build_model(model_path, device):
     return model
 
 
-def run_inference_batch(model, image_paths, transform, device):
+def get_multi_crops(image, crop_size):
+    width, height = image.size
+    if width < crop_size or height < crop_size:
+        return [transforms.CenterCrop(crop_size)(image)]
+
+    center_top = (height - crop_size) // 2
+    center_left = (width - crop_size) // 2
+    corners = [
+        (center_top, center_left),  # center
+        (0, 0),  # top-left
+        (0, width - crop_size),  # top-right
+        (height - crop_size, width - crop_size),  # bottom-right
+        (height - crop_size, 0),  # bottom-left
+    ]
+    return [TF.crop(image, top, left, crop_size, crop_size) for top, left in corners]
+
+
+def run_inference_batch(model, image_paths, transform, device, multi_crop=False, crop_size=224):
     tensors = []
+    crop_counts = []
     for image_path in image_paths:
         with Image.open(image_path) as image:
-            tensors.append(transform(image.convert("RGB")))
+            image = image.convert("RGB")
+            if multi_crop:
+                crops = get_multi_crops(image, crop_size)
+            else:
+                crops = [transforms.CenterCrop(crop_size)(image)]
+
+            crop_tensors = [transform(crop) for crop in crops]
+            tensors.extend(crop_tensors)
+            crop_counts.append(len(crop_tensors))
     if not tensors:
         return []
     tensor = torch.stack(tensors, dim=0).to(device)
     with torch.no_grad():
         scores = model(tensor).sigmoid().view(-1).tolist()
-    return [1 if score >= 0.5 else 0 for score in scores]
+
+    pred_labels = []
+    offset = 0
+    for crop_count in crop_counts:
+        crop_scores = scores[offset : offset + crop_count]
+        pred_labels.append(1 if any(score >= 0.5 for score in crop_scores) else 0)
+        offset += crop_count
+    return pred_labels
 
 
 def write_jsonl_lines(output_path, rows):
@@ -88,7 +135,6 @@ def main():
     model = build_model(args.model_path, device)
     transform = transforms.Compose(
         [
-            transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=MEAN, std=STD),
         ]
@@ -106,7 +152,14 @@ def main():
     processed_count = 0
     for batch_start in range(0, total_files, args.batch_size):
         batch_paths = image_paths[batch_start : batch_start + args.batch_size]
-        pred_labels = run_inference_batch(model, batch_paths, transform, device)
+        pred_labels = run_inference_batch(
+            model,
+            batch_paths,
+            transform,
+            device,
+            multi_crop=args.multi_crop,
+            crop_size=args.crop_size,
+        )
 
         for image_path, pred_label in zip(batch_paths, pred_labels):
             file_name = os.path.basename(image_path)
