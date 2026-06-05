@@ -24,7 +24,16 @@ def parse_args():
     parser.add_argument("--model_path", required=True, help="Path to model .pth file")
     parser.add_argument("--input_folder", required=True, help="Folder with input .png/.webp images")
     parser.add_argument("--output_folder", required=True, help="Folder where JSONL files are written")
-    return parser.parse_args()
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=256,
+        help="Number of images to process per inference batch",
+    )
+    args = parser.parse_args()
+    if args.batch_size <= 0:
+        parser.error("--batch-size must be a positive integer")
+    return args
 
 
 def get_image_list(input_folder):
@@ -51,12 +60,17 @@ def build_model(model_path, device):
     return model
 
 
-def run_inference(model, image_path, transform, device):
-    image = Image.open(image_path).convert("RGB")
-    tensor = transform(image).unsqueeze(0).to(device)
+def run_inference_batch(model, image_paths, transform, device):
+    tensors = []
+    for image_path in image_paths:
+        with Image.open(image_path) as image:
+            tensors.append(transform(image.convert("RGB")))
+    if not tensors:
+        return []
+    tensor = torch.stack(tensors, dim=0).to(device)
     with torch.no_grad():
-        score = model(tensor).sigmoid().item()
-    return 1 if score >= 0.5 else 0
+        scores = model(tensor).sigmoid().view(-1).tolist()
+    return [1 if score >= 0.5 else 0 for score in scores]
 
 
 def write_jsonl_lines(output_path, rows):
@@ -70,6 +84,7 @@ def main():
     os.makedirs(args.output_folder, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
     model = build_model(args.model_path, device)
     transform = transforms.Compose(
         [
@@ -82,19 +97,44 @@ def main():
     detection_rows = []
     complex_rows = []
     simple_rows = []
+    image_paths = get_image_list(args.input_folder)
+    total_files = len(image_paths)
+    print(f"Found {total_files} image files in {args.input_folder}")
+    print(f"Running inference with batch size: {args.batch_size}")
 
-    for image_path in get_image_list(args.input_folder):
-        file_name = os.path.basename(image_path)
-        pred_label = run_inference(model, image_path, transform, device)
-        explanation = FAKE_EXPLANATION if pred_label == 1 else REAL_EXPLANATION
+    fake_count = 0
+    processed_count = 0
+    for batch_start in range(0, total_files, args.batch_size):
+        batch_paths = image_paths[batch_start : batch_start + args.batch_size]
+        pred_labels = run_inference_batch(model, batch_paths, transform, device)
 
-        detection_rows.append({"id": file_name, "pred_label": pred_label})
-        complex_rows.append({"id": file_name, "complex_explanation": explanation})
-        simple_rows.append({"id": file_name, "simple_explanation": explanation})
+        for image_path, pred_label in zip(batch_paths, pred_labels):
+            file_name = os.path.basename(image_path)
+            explanation = FAKE_EXPLANATION if pred_label == 1 else REAL_EXPLANATION
 
-    write_jsonl_lines(os.path.join(args.output_folder, "detection.jsonl"), detection_rows)
-    write_jsonl_lines(os.path.join(args.output_folder, "complex.jsonl"), complex_rows)
-    write_jsonl_lines(os.path.join(args.output_folder, "simple.jsonl"), simple_rows)
+            detection_rows.append({"id": file_name, "pred_label": pred_label})
+            complex_rows.append({"id": file_name, "complex_explanation": explanation})
+            simple_rows.append({"id": file_name, "simple_explanation": explanation})
+            fake_count += pred_label
+
+        processed_count += len(batch_paths)
+        print(f"Processed {processed_count}/{total_files} files")
+
+    detection_output = os.path.join(args.output_folder, "detection.jsonl")
+    complex_output = os.path.join(args.output_folder, "complex.jsonl")
+    simple_output = os.path.join(args.output_folder, "simple.jsonl")
+    write_jsonl_lines(detection_output, detection_rows)
+    write_jsonl_lines(complex_output, complex_rows)
+    write_jsonl_lines(simple_output, simple_rows)
+
+    real_count = total_files - fake_count
+    print(
+        "Inference complete. "
+        f"Total files: {total_files}, fake predictions: {fake_count}, real predictions: {real_count}"
+    )
+    print(f"Wrote detection output to: {detection_output}")
+    print(f"Wrote complex explanations to: {complex_output}")
+    print(f"Wrote simple explanations to: {simple_output}")
 
 
 if __name__ == "__main__":
